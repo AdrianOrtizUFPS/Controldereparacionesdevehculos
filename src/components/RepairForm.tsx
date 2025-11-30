@@ -12,6 +12,7 @@ import { Plus, X, Upload, User, CheckCircle, AlertCircle } from 'lucide-react';
 import { Repair, Vehicle, Supply, Evidence, Owner } from '../types/repair';
 import { addRepair, addOwner, getOwnerByPlate } from '../utils/storage';
 import { toast } from 'sonner@2.0.3';
+import { listarClientes, crearCliente, listarVehiculos, crearVehiculo, crearReparacion } from '@/utils/api';
 
 interface RepairFormProps {
   onSuccess?: () => void;
@@ -119,7 +120,7 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
     setSupplies(supplies.filter(s => s.id !== id));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!vehicle.plate || !vehicle.brand || !repairData.problem || !repairData.technician ||
@@ -171,13 +172,53 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
       updatedAt: new Date()
     };
 
+    // Persistir en backend además de localStorage
+    try {
+      // 1) Asegurar cliente (por nombre y teléfono)
+      const clientes = await listarClientes();
+      let cliente = clientes.find(c => c.nombre === owner.name && c.telefono === owner.phone);
+      if (!cliente) {
+        cliente = await crearCliente({ nombre: owner.name!, telefono: owner.phone!, email: owner.address ? undefined : undefined });
+      }
+
+      // 2) Asegurar vehículo por placa
+      const vehiculos = await listarVehiculos();
+      let vehiculoRow = vehiculos.find(v => v.placa.toUpperCase() === vehicle.plate!.toUpperCase());
+      if (!vehiculoRow) {
+        vehiculoRow = await crearVehiculo({
+          cliente_id: cliente.id,
+          placa: vehicle.plate!,
+          marca: vehicle.brand || undefined,
+          modelo: vehicle.model || undefined,
+          anio: vehicle.year || undefined,
+          vin: vehicle.bin || undefined,
+        });
+      }
+
+      // 3) Crear reparación en estado en_progreso
+      await crearReparacion({
+        vehiculo_id: vehiculoRow.id,
+        descripcion: repairData.problem,
+        estado: 'en_progreso',
+        costo_estimado: undefined,
+        costo_final: undefined,
+        fecha_ingreso: repair.entryDate.toISOString().slice(0, 10),
+        fecha_salida: undefined,
+        tecnico: repairData.technician,
+        tipo_servicio: 'general',
+      });
+    } catch (err: any) {
+      toast.error(`No se pudo guardar en la base de datos: ${err?.message || 'Error desconocido'}`);
+    }
+
+    // Mantener persistencia local para la UI actual
     addRepair(repair);
     toast.success('Reparación registrada exitosamente');
     
     // Reset form
     setOwner({ cedula: '', name: '', phone: '', address: '' });
     setVehicle({ plate: '', brand: '', model: '', year: new Date().getFullYear(), bin: '', color: '' });
-    setRepairData({ problem: '', technician: '', notes: '' });
+    setRepairData({problem: '', technician: '', notes: '' });
     setSupplies([]);
     setExistingOwner(false);
     setPlateSearched(false);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -6,29 +6,52 @@ import { Wrench, Plus, History, Search, Car } from 'lucide-react';
 import { RepairForm } from './components/RepairForm';
 import { RepairHistory } from './components/RepairHistory';
 import { Toaster } from './components/ui/sonner';
+import { ClientsPanel } from './components/ClientsPanel';
+import { VehiclesPanel } from './components/VehiclesPanel';
+import { RepairsPanel } from './components/RepairsPanel';
+import { LoginForm } from './components/LoginForm';
+import { me, logout, type User } from './utils/api';
+import { Reports } from './components/Reports';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('history');
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    me().then(setUser).catch(() => setUser(null)).finally(() => setAuthReady(true));
+  }, []);
 
   const handleRepairSuccess = () => {
     // Switch to history tab after successful registration
     setActiveTab('history');
   };
 
+  if (!authReady || !user) {
+    return <LoginForm onSuccess={() => me().then(setUser)} />;
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b">
         <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="p-2 bg-primary rounded-lg">
               <Wrench className="size-6 text-primary-foreground" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-2xl font-bold">Sistema de Control de Reparaciones</h1>
-              <p className="text-muted-foreground">
-                Gestión integral de reparaciones de vehículos
-              </p>
+              <p className="text-muted-foreground">Gestión integral de reparaciones de vehículos</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="text-sm text-muted-foreground text-right">
+                <div className="font-medium text-foreground">{user.name}</div>
+                <div className="uppercase">{user.role}</div>
+              </div>
+              <Button variant="secondary" onClick={() => { logout(); setUser(null); }}>
+                Cerrar sesión
+              </Button>
             </div>
           </div>
         </div>
@@ -93,13 +116,23 @@ export default function App() {
                   <Plus className="size-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <Button 
-                    onClick={() => setActiveTab('new-repair')}
-                    className="w-full"
-                  >
-                    <Plus className="size-4 mr-2" />
-                    Registrar Nueva Reparación
-                  </Button>
+                  <div className="space-y-2">
+                    <Button 
+                      onClick={() => setActiveTab('new-repair')}
+                      className="w-full"
+                    >
+                      <Plus className="size-4 mr-2" />
+                      Registrar Nueva Reparación
+                    </Button>
+                    <Button 
+                      variant="outline"
+                      onClick={() => setActiveTab('reports')}
+                      className="w-full"
+                    >
+                      <Search className="size-4 mr-2" />
+                      Ver Reportes
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -113,7 +146,7 @@ export default function App() {
                 <CardContent>
                   <p className="text-sm text-muted-foreground">
                     Busque reparaciones por patente, marca, modelo o número VIN/BIN.
-                    Todos los datos se guardan localmente en su navegador.
+                    Los datos se almacenan en el servidor (PostgreSQL) y se consumen desde el frontend.
                   </p>
                 </CardContent>
               </Card>
@@ -122,11 +155,18 @@ export default function App() {
 
           {/* Tab Contents */}
           <TabsContent value="history" className="space-y-6">
+            <ClientsPanel />
+            <VehiclesPanel />
+            <RepairsPanel />
             <RepairHistory />
           </TabsContent>
 
           <TabsContent value="new-repair" className="space-y-6">
             <RepairForm onSuccess={handleRepairSuccess} />
+          </TabsContent>
+
+          <TabsContent value="reports" className="space-y-6">
+            <Reports />
           </TabsContent>
         </Tabs>
       </main>

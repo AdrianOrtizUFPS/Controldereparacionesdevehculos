@@ -4,10 +4,11 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Search, Eye, Calendar, User, Wrench, UserCheck } from 'lucide-react';
 import { Repair, Owner } from '../types/repair';
-import { getRepairs, searchRepairs, getOwners } from '../utils/storage';
+import { getOwners } from '../utils/storage';
+import { listarReparaciones, Reparacion as ApiReparacion } from '@/utils/api';
 import { RepairDetails } from './RepairDetails';
 
 export function RepairHistory() {
@@ -16,6 +17,7 @@ export function RepairHistory() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredRepairs, setFilteredRepairs] = useState<Repair[]>([]);
   const [selectedRepair, setSelectedRepair] = useState<Repair | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
     loadRepairs();
@@ -24,35 +26,75 @@ export function RepairHistory() {
 
   useEffect(() => {
     if (searchQuery.trim()) {
-      // Buscar en reparaciones y también en datos de propietarios
-      const repairResults = searchRepairs(searchQuery);
-      const ownerResults = owners.filter(owner => 
-        owner.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        owner.cedula.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        owner.phone.toLowerCase().includes(searchQuery.toLowerCase())
+      const q = searchQuery.toLowerCase();
+      // Filtrar reparaciones actuales (estado en memoria)
+      const repairResults = repairs.filter(r =>
+        r.vehicle.plate.toLowerCase().includes(q) ||
+        r.vehicle.brand.toLowerCase().includes(q) ||
+        r.vehicle.model.toLowerCase().includes(q) ||
+        r.problem.toLowerCase().includes(q)
       );
-      
-      // Agregar reparaciones de propietarios encontrados
+
+      // Coincidencias por propietario guardado localmente (si existiera ownerId)
+      const ownerResults = owners.filter(owner => 
+        owner.name.toLowerCase().includes(q) ||
+        owner.cedula.toLowerCase().includes(q) ||
+        owner.phone.toLowerCase().includes(q)
+      );
       const ownerRepairs = repairs.filter(repair => 
         ownerResults.some(owner => owner.id === repair.vehicle.ownerId)
       );
-      
-      // Combinar resultados y eliminar duplicados
+
       const allResults = [...repairResults, ...ownerRepairs];
       const uniqueResults = allResults.filter((repair, index, self) => 
         index === self.findIndex(r => r.id === repair.id)
       );
-      
       setFilteredRepairs(uniqueResults);
     } else {
       setFilteredRepairs(repairs);
     }
   }, [searchQuery, repairs, owners]);
 
-  const loadRepairs = () => {
-    const allRepairs = getRepairs();
-    setRepairs(allRepairs);
-    setFilteredRepairs(allRepairs);
+  const loadRepairs = async () => {
+    try {
+      const apiRows: ApiReparacion[] = await listarReparaciones();
+      const mapped: Repair[] = apiRows.map((r) => ({
+        id: String(r.id),
+        vehicle: {
+          id: String(r.vehiculo_id),
+          plate: (r as any).placa,
+          brand: (r as any).marca || '',
+          model: (r as any).modelo || '',
+          year: (r as any).anio || new Date().getFullYear(),
+          bin: (r as any).vin || undefined,
+          color: undefined,
+          ownerId: '',
+        },
+        entryDate: new Date(r.fecha_ingreso),
+        exitDate: r.fecha_salida ? new Date(r.fecha_salida) : undefined,
+        problem: r.descripcion,
+        solution: undefined,
+        status: r.estado === 'completada'
+          ? 'completed'
+          : r.estado === 'cancelada'
+            ? 'cancelled'
+            : 'in-progress',
+        supplies: [],
+        evidences: [],
+        technician: (r as any).tecnico || '',
+        cost: r.costo_final ?? r.costo_estimado ?? undefined,
+        notes: '',
+        createdAt: new Date(r.fecha_ingreso),
+        updatedAt: new Date(r.fecha_ingreso),
+      }));
+      setRepairs(mapped);
+      setFilteredRepairs(mapped);
+    } catch (e: any) {
+      console.error('Error cargando reparaciones desde API:', e?.message || e);
+      // Si falla, deja las listas vacías (o podríamos hacer fallback a localStorage si se desea)
+      setRepairs([]);
+      setFilteredRepairs([]);
+    }
   };
 
   const loadOwners = () => {
@@ -201,31 +243,14 @@ export function RepairHistory() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Dialog>
-                          <DialogTrigger asChild>
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              onClick={() => setSelectedRepair(repair)}
-                            >
-                              <Eye className="size-4 mr-2" />
-                              Ver Detalles
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-                            <DialogHeader>
-                              <DialogTitle>
-                                Detalles de Reparación - {repair.vehicle.plate}
-                              </DialogTitle>
-                            </DialogHeader>
-                            {selectedRepair && (
-                              <RepairDetails 
-                                repair={selectedRepair} 
-                                onUpdate={loadRepairs}
-                              />
-                            )}
-                          </DialogContent>
-                        </Dialog>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => { setSelectedRepair(repair); setDetailsOpen(true); }}
+                        >
+                          <Eye className="size-4 mr-2" />
+                          Ver Detalles
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
@@ -288,6 +313,27 @@ export function RepairHistory() {
             </CardContent>
           </Card>
         </div>
+      )}
+      {/* Dialog controlado para ver detalles */}
+      {detailsOpen && (
+        <Dialog
+          open={detailsOpen}
+          onOpenChange={(o) => { setDetailsOpen(o); if (!o) setSelectedRepair(null); }}
+        >
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" key={selectedRepair ? String(selectedRepair.id) : 'no-repair'}>
+            <DialogHeader>
+              <DialogTitle>
+                {selectedRepair ? `Detalles de Reparación - ${selectedRepair.vehicle.plate}` : 'Detalles de Reparación'}
+              </DialogTitle>
+            </DialogHeader>
+            {selectedRepair && (
+              <RepairDetails 
+                repair={selectedRepair} 
+                onUpdate={() => { loadRepairs(); }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
