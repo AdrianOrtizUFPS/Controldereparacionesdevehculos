@@ -44,6 +44,9 @@ export default function App() {
               <h1 className="text-2xl font-bold">Sistema de Control de Reparaciones</h1>
               <p className="text-muted-foreground">Gestión integral de reparaciones de vehículos</p>
             </div>
+            <div className="flex-1">
+              <img src="/src/utils/22.2 test.png" width="100" height="300" alt="Logo" className="h-12 mx-auto" />
+            </div>
             <div className="flex items-center gap-3">
               <div className="text-sm text-muted-foreground text-right">
                 <div className="font-medium text-foreground">{user.name}</div>
@@ -61,7 +64,7 @@ export default function App() {
       <main className="container mx-auto px-4 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           {/* Navigation Tabs */}
-          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsList className="grid-cols-1 ">
             <TabsTrigger value="history" className="flex items-center gap-2">
               <History className="size-4" />
               Historial
@@ -69,6 +72,18 @@ export default function App() {
             <TabsTrigger value="new-repair" className="flex items-center gap-2">
               <Plus className="size-4" />
               Nueva Reparación
+            </TabsTrigger>
+            <TabsTrigger value="reports" className="flex items-center gap-2">
+              <Plus className="size-4" />
+              Ver Reportes
+            </TabsTrigger>
+            <TabsTrigger value="clients" className="flex items-center gap-2">
+              <Plus className="size-4" />
+              Ver Clientes
+            </TabsTrigger>
+            <TabsTrigger value="vehicles" className="flex items-center gap-2">
+              <Plus className="size-4" />
+              Ver Vehiculos
             </TabsTrigger>
           </TabsList>
 
@@ -117,14 +132,14 @@ export default function App() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    <Button 
+                    <Button
                       onClick={() => setActiveTab('new-repair')}
                       className="w-full"
                     >
                       <Plus className="size-4 mr-2" />
                       Registrar Nueva Reparación
                     </Button>
-                    <Button 
+                    <Button
                       variant="outline"
                       onClick={() => setActiveTab('reports')}
                       className="w-full"
@@ -132,32 +147,48 @@ export default function App() {
                       <Search className="size-4 mr-2" />
                       Ver Reportes
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      onClick={() => setActiveTab('clients')}
+                      className="w-full"
+                    >
+                      <Search className="size-4 mr-2" />
+                      Clientes
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      onClick={() => setActiveTab('vehicles')}
+                      className="w-full"
+                    >
+                      <Search className="size-4 mr-2" />
+                      Vehiculos
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">
-                    Información
-                  </CardTitle>
-                  <Search className="size-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Busque reparaciones por patente, marca, modelo o número VIN/BIN.
-                    Los datos se almacenan en el servidor (PostgreSQL) y se consumen desde el frontend.
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-          )}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">
+            Información
+          </CardTitle>
+          <Search className="size-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Busque reparaciones por patente, marca, modelo o número VIN/BIN.
+            Los datos se almacenan en el servidor (PostgreSQL) y se consumen desde el frontend.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
 
-          {/* Tab Contents */}
+{/* Tab Contents */ }
           <TabsContent value="history" className="space-y-6">
-            <ClientsPanel />
-            <VehiclesPanel />
-            <RepairsPanel />
             <RepairHistory />
           </TabsContent>
 
@@ -168,11 +199,19 @@ export default function App() {
           <TabsContent value="reports" className="space-y-6">
             <Reports />
           </TabsContent>
-        </Tabs>
-      </main>
 
-      {/* Toast notifications */}
-      <Toaster />
-    </div>
+          <TabsContent value="clients" className="space-y-6">
+            <ClientsPanel />
+          </TabsContent>
+
+          <TabsContent value="vehicles" className="space-y-6">
+            <VehiclesPanel />
+          </TabsContent>
+        </Tabs >
+      </main >
+
+  {/* Toast notifications */ }
+  < Toaster />
+    </div >
   );
 }

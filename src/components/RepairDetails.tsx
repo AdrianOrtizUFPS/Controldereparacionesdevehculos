@@ -22,8 +22,8 @@ import {
   UserCheck
 } from 'lucide-react';
 import { Repair, Supply, Evidence, Owner } from '../types/repair';
-import { updateRepair, getOwners } from '../utils/storage';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
+import { actualizarReparacion, listarClientes, Cliente, listarImagenesReparacion, subirImagenReparacion, eliminarImagenReparacion, ImagenReparacion } from '@/utils/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface RepairDetailsProps {
@@ -37,13 +37,68 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
   const [newSupply, setNewSupply] = useState({ name: '', quantity: 1, unit: '', cost: 0 });
   const [newEvidence, setNewEvidence] = useState({ url: '', description: '' });
   const [owner, setOwner] = useState<Owner | null>(null);
+  const [imagenes, setImagenes] = useState<ImagenReparacion[]>([]);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [exitDate, setExitDate] = useState<string>('');
+  const [exitTime, setExitTime] = useState<string>('');
 
-  // Cargar datos del propietario
+  // Sincronizar editedRepair cuando cambia repair
   useEffect(() => {
-    const owners = getOwners();
-    const vehicleOwner = owners.find(o => o.id === repair.vehicle.ownerId);
-    setOwner(vehicleOwner || null);
-  }, [repair.vehicle.ownerId]);
+    console.log('🔄 useEffect sync - repair.exitDate:', repair.exitDate);
+    setEditedRepair(repair);
+    
+    // Inicializar inputs de fecha y hora por separado
+    if (repair.exitDate) {
+      if (typeof repair.exitDate === 'string') {
+        const [datePart, timePart] = repair.exitDate.split(' ');
+        setExitDate(datePart || '');
+        setExitTime(timePart ? timePart.slice(0, 5) : '');
+      } else if (repair.exitDate instanceof Date && !isNaN(repair.exitDate.getTime())) {
+        const d = repair.exitDate;
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        setExitDate(`${year}-${month}-${day}`);
+        setExitTime(`${hours}:${minutes}`);
+      }
+    } else {
+      setExitDate('');
+      setExitTime('');
+    }
+  }, [repair]);
+
+  // Cargar datos del propietario y las imágenes desde la base de datos
+  useEffect(() => {
+    const loadOwner = async () => {
+      try {
+        const clients = await listarClientes();
+        const client = clients.find(c => (c as any).cedula === repair.vehicle.ownerId);
+        if (client) {
+          setOwner({
+            id: (client as any).cedula || '',
+            cedula: (client as any).cedula || '',
+            name: client.nombre || '',
+            phone: client.telefono || '',
+            address: (client as any).direccion || ''
+          });
+        }
+      } catch (e) {
+        console.error('Error cargando propietario:', e);
+      }
+    };
+    const loadImagenes = async () => {
+      try {
+        const imgs = await listarImagenesReparacion(Number(repair.id));
+        setImagenes(imgs);
+      } catch (e) {
+        console.error('Error cargando imágenes:', e);
+      }
+    };
+    loadOwner();
+    loadImagenes();
+  }, [repair.vehicle.ownerId, repair.id]);
 
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat('es-ES', {
@@ -58,26 +113,105 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
   const getStatusBadge = (status: Repair['status']) => {
     switch (status) {
       case 'in-progress':
-        return <Badge variant="secondary">En Proceso</Badge>;
+        return (
+          <span 
+            className="inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium border"
+            style={{ backgroundColor: '#e5e7eb', color: '#111827', borderColor: '#d1d5db' }}
+          >
+            En Proceso
+          </span>
+        );
       case 'completed':
-        return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Completado</Badge>;
+        return (
+          <span 
+            className="inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium"
+            style={{ backgroundColor: '#22c55e', color: '#ffffff' }}
+          >
+            Completado
+          </span>
+        );
       case 'cancelled':
-        return <Badge variant="destructive">Cancelado</Badge>;
+        return (
+          <span 
+            className="inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium"
+            style={{ backgroundColor: '#ef4444', color: '#ffffff' }}
+          >
+            Cancelado
+          </span>
+        );
       default:
         return <Badge variant="outline">Desconocido</Badge>;
     }
   };
 
-  const handleSave = () => {
-    const updated = {
-      ...editedRepair,
-      updatedAt: new Date()
-    };
-    
-    updateRepair(updated);
-    setIsEditing(false);
-    toast.success('Reparación actualizada exitosamente');
-    onUpdate?.();
+  const handleSave = async () => {
+    try {
+      console.log('💾 handleSave - exitDate:', exitDate, 'exitTime:', exitTime);
+      
+      const estadoApi = editedRepair.status === 'completed' 
+        ? 'completada'
+        : editedRepair.status === 'cancelled'
+          ? 'cancelada'
+          : 'en_progreso';
+
+      // Combinar fecha y hora si ambas están presentes
+      let exitDateToUse = null;
+      if (exitDate && exitTime) {
+        exitDateToUse = `${exitDate}T${exitTime}`;
+        console.log('🔍 DEBUG FECHA - combinada:', exitDateToUse);
+      } else if (exitDate) {
+        exitDateToUse = `${exitDate}T00:00`;
+        console.log('🔍 DEBUG FECHA - solo fecha (00:00):', exitDateToUse);
+      } else {
+        exitDateToUse = editedRepair.exitDate;
+        console.log('🔍 DEBUG FECHA - usando existente:', exitDateToUse);
+      }
+      
+      // Formatear fecha_salida: mantener hora local sin conversión UTC
+      let fechaSalida = null;
+      if (exitDateToUse) {
+        if (typeof exitDateToUse === 'string') {
+          // Validar que no sea cadena vacía
+          const trimmed = exitDateToUse.trim();
+          if (trimmed) {
+            // Del input datetime-local: "YYYY-MM-DDTHH:mm" -> "YYYY-MM-DD HH:mm:ss"
+            fechaSalida = trimmed.replace('T', ' ') + ':00';
+            console.log('✅ Fecha desde STRING:', fechaSalida);
+          }
+        } else if (exitDateToUse instanceof Date && !isNaN(exitDateToUse.getTime())) {
+          // De Date object válido: extraer componentes locales
+          const year = exitDateToUse.getFullYear();
+          const month = String(exitDateToUse.getMonth() + 1).padStart(2, '0');
+          const day = String(exitDateToUse.getDate()).padStart(2, '0');
+          const hours = String(exitDateToUse.getHours()).padStart(2, '0');
+          const minutes = String(exitDateToUse.getMinutes()).padStart(2, '0');
+          fechaSalida = `${year}-${month}-${day} ${hours}:${minutes}:00`;
+          console.log('✅ Fecha desde DATE:', fechaSalida);
+        }
+      }
+      
+      console.log('📤 Fecha final a enviar:', fechaSalida);
+
+      const updateData: any = {
+        descripcion: editedRepair.problem,
+        estado: estadoApi,
+        costo_final: editedRepair.cost || 0
+      };
+
+      // Solo incluir fecha_salida si hay un valor válido
+      if (fechaSalida) {
+        updateData.fecha_salida = fechaSalida;
+      }
+
+      await actualizarReparacion(Number(editedRepair.id), updateData);
+      
+      setIsEditing(false);
+      toast.success('Reparación actualizada exitosamente');
+      onUpdate?.();
+    } catch (e: any) {
+      console.error('Error actualizando reparación:', e);
+      toast.error(`Error al actualizar: ${e?.message || 'Error desconocido'}`);
+    }
   };
 
   const addSupply = () => {
@@ -130,6 +264,78 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
     });
   };
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validar tipo de archivo
+    if (!file.type.startsWith('image/')) {
+      toast.error('Solo se permiten archivos de imagen');
+      return;
+    }
+
+    // Validar tamaño (máximo 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('La imagen no puede superar los 5MB');
+      return;
+    }
+
+    setUploadingImage(true);
+    try {
+      // Convertir imagen a base64
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const base64 = event.target?.result as string;
+          const base64Data = base64.split(',')[1]; // Remover el prefijo "data:image/...;base64,"
+
+          const nuevaImagen = await subirImagenReparacion(Number(repair.id), {
+            nombre_archivo: file.name,
+            tipo_mime: file.type,
+            tamano_bytes: file.size,
+            datos_base64: base64Data,
+            descripcion: ''
+          });
+
+          setImagenes(prev => [nuevaImagen, ...prev]);
+          toast.success('Imagen subida exitosamente');
+          
+          // Resetear input
+          e.target.value = '';
+        } catch (error: any) {
+          console.error('Error subiendo imagen:', error);
+          toast.error(`Error al subir imagen: ${error?.message || 'Error desconocido'}`);
+        } finally {
+          setUploadingImage(false);
+        }
+      };
+      reader.onerror = () => {
+        toast.error('Error al leer el archivo');
+        setUploadingImage(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (error: any) {
+      console.error('Error procesando imagen:', error);
+      toast.error(`Error: ${error?.message || 'Error desconocido'}`);
+      setUploadingImage(false);
+    }
+  };
+
+  const handleDeleteImage = async (imagenId: number) => {
+    if (!window.confirm('¿Está seguro de eliminar esta imagen? Esta acción no se puede deshacer.')) {
+      return;
+    }
+
+    try {
+      await eliminarImagenReparacion(Number(repair.id), imagenId);
+      setImagenes(prev => prev.filter(img => img.id !== imagenId));
+      toast.success('Imagen eliminada');
+    } catch (error: any) {
+      console.error('Error eliminando imagen:', error);
+      toast.error(`Error al eliminar: ${error?.message || 'Error desconocido'}`);
+    }
+  };
+
   const currentRepair = isEditing ? editedRepair : repair;
 
   return (
@@ -162,7 +368,10 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
               </Button>
             </>
           ) : (
-            <Button onClick={() => setIsEditing(true)} variant="outline" size="sm">
+            <Button onClick={() => {
+              console.log('✏️ Editar clicked - repair.exitDate:', repair.exitDate, 'editedRepair.exitDate:', editedRepair.exitDate);
+              setIsEditing(true);
+            }} variant="outline" size="sm">
               <Edit className="size-4 mr-2" />
               Editar
             </Button>
@@ -249,60 +458,78 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <Label>Estado</Label>
-              {isEditing ? (
-                <Select 
-                  value={editedRepair.status} 
-                  onValueChange={(value) => setEditedRepair({
-                    ...editedRepair, 
-                    status: value as Repair['status']
-                  })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="in-progress">En Proceso</SelectItem>
-                    <SelectItem value="completed">Completado</SelectItem>
-                    <SelectItem value="cancelled">Cancelado</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="mt-1">
-                  {getStatusBadge(currentRepair.status)}
+          <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Estado</Label>
+                {isEditing ? (
+                  <Select 
+                    value={editedRepair.status} 
+                    onValueChange={(value) => setEditedRepair({
+                      ...editedRepair, 
+                      status: value as Repair['status']
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="in-progress">En Proceso</SelectItem>
+                      <SelectItem value="completed">Completado</SelectItem>
+                      <SelectItem value="cancelled">Cancelado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="mt-1">
+                    {getStatusBadge(currentRepair.status)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <Label>Fecha de Ingreso</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <Calendar className="size-4 text-muted-foreground" />
+                  <span>{formatDate(currentRepair.entryDate)}</span>
                 </div>
-              )}
-            </div>
-            <div>
-              <Label>Fecha de Ingreso</Label>
-              <div className="flex items-center gap-2 mt-1">
-                <Calendar className="size-4 text-muted-foreground" />
-                <span>{formatDate(currentRepair.entryDate)}</span>
               </div>
             </div>
             <div>
               <Label>Fecha de Salida</Label>
               {isEditing ? (
-                <Input
-                  type="datetime-local"
-                  value={editedRepair.exitDate ? 
-                    editedRepair.exitDate.toISOString().slice(0, 16) : ''
-                  }
-                  onChange={(e) => setEditedRepair({
-                    ...editedRepair,
-                    exitDate: e.target.value ? new Date(e.target.value) : undefined
-                  })}
-                />
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <input
+                        type="date"
+                        value={exitDate}
+                        onChange={(e) => {
+                          console.log('📅 Fecha onChange:', e.target.value);
+                          setExitDate(e.target.value);
+                        }}
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="time"
+                        value={exitTime}
+                        onChange={(e) => {
+                          console.log('⏰ Hora onChange:', e.target.value);
+                          setExitTime(e.target.value);
+                        }}
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Deja vacío para mantener sin fecha de salida
+                  </p>
+                </div>
               ) : (
                 <div className="flex items-center gap-2 mt-1">
                   <Calendar className="size-4 text-muted-foreground" />
                   <span>
-                    {currentRepair.exitDate ? 
-                      formatDate(currentRepair.exitDate) : 
-                      'En proceso'
-                    }
+                    {currentRepair.exitDate ? formatDate(currentRepair.exitDate) : 'Sin fecha de salida'}
                   </span>
                 </div>
               )}
@@ -311,10 +538,10 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
         </CardContent>
       </Card>
 
-      {/* Descripción del Problema y Solución */}
+      {/* Descripción del Problema y Costos */}
       <Card>
         <CardHeader>
-          <CardTitle>Descripción del Problema y Solución</CardTitle>
+          <CardTitle>Descripción del Problema y Costos</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
@@ -333,175 +560,93 @@ export function RepairDetails({ repair, onUpdate }: RepairDetailsProps) {
             )}
           </div>
           <div>
-            <Label>Solución Aplicada</Label>
-            {isEditing ? (
-              <Textarea
-                value={editedRepair.solution || ''}
-                onChange={(e) => setEditedRepair({
-                  ...editedRepair,
-                  solution: e.target.value
-                })}
-                placeholder="Describa la solución aplicada..."
-                rows={3}
-              />
-            ) : (
-              <p className="mt-1 p-3 bg-muted rounded-lg">
-                {currentRepair.solution || 'No se ha registrado solución aún'}
-              </p>
-            )}
-          </div>
-          <div>
             <Label>Técnico Responsable</Label>
             <div className="flex items-center gap-2 mt-1">
               <User className="size-4 text-muted-foreground" />
               <span>{currentRepair.technician}</span>
             </div>
           </div>
-          {currentRepair.notes && (
-            <div>
-              <Label>Notas Adicionales</Label>
-              {isEditing ? (
-                <Textarea
-                  value={editedRepair.notes || ''}
-                  onChange={(e) => setEditedRepair({
-                    ...editedRepair,
-                    notes: e.target.value
-                  })}
-                  rows={2}
-                />
-              ) : (
-                <p className="mt-1 p-3 bg-muted rounded-lg">{currentRepair.notes}</p>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Insumos Utilizados */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Package className="size-5" />
-            Insumos Utilizados
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isEditing && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4 p-4 bg-muted rounded-lg">
-              <Input
-                placeholder="Nombre del insumo"
-                value={newSupply.name}
-                onChange={(e) => setNewSupply({ ...newSupply, name: e.target.value })}
-              />
+          <div>
+            <Label>Costo Final (COP)</Label>
+            {isEditing ? (
               <Input
                 type="number"
-                placeholder="Cantidad"
-                min="1"
-                value={newSupply.quantity}
-                onChange={(e) => setNewSupply({ ...newSupply, quantity: parseInt(e.target.value) || 1 })}
+                value={editedRepair.cost || ''}
+                onChange={(e) => setEditedRepair({
+                  ...editedRepair,
+                  cost: e.target.value ? Number(e.target.value) : undefined
+                })}
+                placeholder="Ingrese el costo final"
               />
-              <Input
-                placeholder="Unidad"
-                value={newSupply.unit}
-                onChange={(e) => setNewSupply({ ...newSupply, unit: e.target.value })}
-              />
-              <Button onClick={addSupply} size="sm">
-                <Plus className="size-4 mr-2" />
-                Agregar
-              </Button>
-            </div>
-          )}
-          
-          {currentRepair.supplies.length === 0 ? (
-            <p className="text-muted-foreground">No se han registrado insumos</p>
-          ) : (
-            <div className="space-y-2">
-              {currentRepair.supplies.map((supply) => (
-                <div key={supply.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">
-                      {supply.quantity} {supply.unit}
-                    </Badge>
-                    <span>{supply.name}</span>
-                    {supply.cost && supply.cost > 0 && (
-                      <span className="text-sm text-muted-foreground">
-                        (${supply.cost.toFixed(2)})
-                      </span>
-                    )}
-                  </div>
-                  {isEditing && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeSupply(supply.id)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+            ) : (
+              <p className="mt-1 p-3 bg-muted rounded-lg">
+                {currentRepair.cost ? `$${currentRepair.cost.toLocaleString('es-CO')} COP` : 'No especificado'}
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
 
-      {/* Evidencias */}
+
+      {/* Imágenes de la Base de Datos */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileImage className="size-5" />
-            Evidencias
+            Imágenes de la Reparación
           </CardTitle>
+          <CardDescription>
+            Imágenes almacenadas en la base de datos (máximo 5MB por imagen)
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {isEditing && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4 p-4 bg-muted rounded-lg">
-              <Input
-                placeholder="URL de la imagen"
-                value={newEvidence.url}
-                onChange={(e) => setNewEvidence({ ...newEvidence, url: e.target.value })}
-              />
-              <Input
-                placeholder="Descripción"
-                value={newEvidence.description}
-                onChange={(e) => setNewEvidence({ ...newEvidence, description: e.target.value })}
-              />
-              <Button onClick={addEvidence} size="sm">
-                <Plus className="size-4 mr-2" />
-                Agregar
-              </Button>
-            </div>
-          )}
-          
-          {currentRepair.evidences.length === 0 ? (
-            <p className="text-muted-foreground">No se han agregado evidencias</p>
+          <div className="mb-4">
+            <Label htmlFor="image-upload" className="cursor-pointer">
+              <div className="flex items-center gap-2 p-4 border-2 border-dashed rounded-lg hover:bg-muted transition-colors">
+                <Plus className="size-5" />
+                <span>{uploadingImage ? 'Subiendo imagen...' : 'Seleccionar imagen para subir'}</span>
+              </div>
+            </Label>
+            <Input
+              id="image-upload"
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
+              disabled={uploadingImage}
+              className="hidden"
+            />
+          </div>
+
+          {imagenes.length === 0 ? (
+            <p className="text-muted-foreground">No hay imágenes almacenadas</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {currentRepair.evidences.map((evidence) => (
-                <div key={evidence.id} className="relative">
-                  <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-                    <ImageWithFallback
-                      src={evidence.url}
-                      alt={evidence.description}
+              {imagenes.map((imagen) => (
+                <div key={imagen.id} className="relative group">
+                  <div className="aspect-video bg-muted rounded-lg overflow-hidden border">
+                    <img
+                      src={`data:${imagen.tipo_mime};base64,${imagen.datos_base64}`}
+                      alt={imagen.nombre_archivo}
                       className="w-full h-full object-cover"
                     />
                   </div>
                   <div className="mt-2">
-                    <p className="text-sm">{evidence.description}</p>
+                    <p className="text-sm font-medium truncate">{imagen.nombre_archivo}</p>
                     <p className="text-xs text-muted-foreground">
-                      {formatDate(evidence.uploadedAt)}
+                      {formatDate(new Date(imagen.creado_en))} · {(imagen.tamano_bytes / 1024).toFixed(1)} KB
                     </p>
+                    {imagen.descripcion && (
+                      <p className="text-xs mt-1">{imagen.descripcion}</p>
+                    )}
                   </div>
-                  {isEditing && (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="absolute top-2 right-2"
-                      onClick={() => removeEvidence(evidence.id)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => handleDeleteImage(imagen.id)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
                 </div>
               ))}
             </div>

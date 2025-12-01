@@ -7,68 +7,68 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Search, Eye, Calendar, User, Wrench, UserCheck } from 'lucide-react';
 import { Repair, Owner } from '../types/repair';
-import { getOwners } from '../utils/storage';
-import { listarReparaciones, Reparacion as ApiReparacion } from '@/utils/api';
+import { listarReparaciones, listarClientes, Reparacion as ApiReparacion, Cliente } from '@/utils/api';
 import { RepairDetails } from './RepairDetails';
 
 export function RepairHistory() {
   const [repairs, setRepairs] = useState<Repair[]>([]);
-  const [owners, setOwners] = useState<Owner[]>([]);
+  const [clients, setClients] = useState<Cliente[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredRepairs, setFilteredRepairs] = useState<Repair[]>([]);
   const [selectedRepair, setSelectedRepair] = useState<Repair | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
-    loadRepairs();
-    loadOwners();
+    loadData();
   }, []);
 
   useEffect(() => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      // Filtrar reparaciones actuales (estado en memoria)
-      const repairResults = repairs.filter(r =>
-        r.vehicle.plate.toLowerCase().includes(q) ||
-        r.vehicle.brand.toLowerCase().includes(q) ||
-        r.vehicle.model.toLowerCase().includes(q) ||
-        r.problem.toLowerCase().includes(q)
-      );
-
-      // Coincidencias por propietario guardado localmente (si existiera ownerId)
-      const ownerResults = owners.filter(owner => 
-        owner.name.toLowerCase().includes(q) ||
-        owner.cedula.toLowerCase().includes(q) ||
-        owner.phone.toLowerCase().includes(q)
-      );
-      const ownerRepairs = repairs.filter(repair => 
-        ownerResults.some(owner => owner.id === repair.vehicle.ownerId)
-      );
-
-      const allResults = [...repairResults, ...ownerRepairs];
-      const uniqueResults = allResults.filter((repair, index, self) => 
-        index === self.findIndex(r => r.id === repair.id)
-      );
-      setFilteredRepairs(uniqueResults);
+      const filtered = repairs.filter(r => {
+        // Buscar en datos del vehículo
+        const vehicleMatch = 
+          r.vehicle.plate.toLowerCase().includes(q) ||
+          r.vehicle.brand.toLowerCase().includes(q) ||
+          r.vehicle.model.toLowerCase().includes(q) ||
+          (r.vehicle.bin && r.vehicle.bin.toLowerCase().includes(q));
+        
+        // Buscar en datos del propietario
+        const owner = getOwnerByRepair(r);
+        const ownerMatch = owner && (
+          owner.name.toLowerCase().includes(q) ||
+          owner.cedula.toLowerCase().includes(q) ||
+          owner.phone.toLowerCase().includes(q)
+        );
+        
+        return vehicleMatch || ownerMatch;
+      });
+      setFilteredRepairs(filtered);
     } else {
       setFilteredRepairs(repairs);
     }
-  }, [searchQuery, repairs, owners]);
+  }, [searchQuery, repairs, clients]);
 
-  const loadRepairs = async () => {
+  const loadData = async () => {
     try {
-      const apiRows: ApiReparacion[] = await listarReparaciones();
-      const mapped: Repair[] = apiRows.map((r) => ({
+      const [apiRows, clientsList] = await Promise.all([
+        listarReparaciones(),
+        listarClientes()
+      ]);
+      
+      setClients(clientsList);
+      
+      const mapped: Repair[] = apiRows.map((r: any) => ({
         id: String(r.id),
         vehicle: {
           id: String(r.vehiculo_id),
-          plate: (r as any).placa,
-          brand: (r as any).marca || '',
-          model: (r as any).modelo || '',
-          year: (r as any).anio || new Date().getFullYear(),
-          bin: (r as any).vin || undefined,
+          plate: r.placa || r.vehiculo_id,
+          brand: r.marca || '',
+          model: r.modelo || '',
+          year: r.anio || new Date().getFullYear(),
+          bin: r.vin || undefined,
           color: undefined,
-          ownerId: '',
+          ownerId: r.cliente_id || '',
         },
         entryDate: new Date(r.fecha_ingreso),
         exitDate: r.fecha_salida ? new Date(r.fecha_salida) : undefined,
@@ -81,7 +81,7 @@ export function RepairHistory() {
             : 'in-progress',
         supplies: [],
         evidences: [],
-        technician: (r as any).tecnico || '',
+        technician: r.tecnico || '',
         cost: r.costo_final ?? r.costo_estimado ?? undefined,
         notes: '',
         createdAt: new Date(r.fecha_ingreso),
@@ -90,32 +90,37 @@ export function RepairHistory() {
       setRepairs(mapped);
       setFilteredRepairs(mapped);
     } catch (e: any) {
-      console.error('Error cargando reparaciones desde API:', e?.message || e);
-      // Si falla, deja las listas vacías (o podríamos hacer fallback a localStorage si se desea)
+      console.error('Error cargando datos desde API:', e?.message || e);
       setRepairs([]);
       setFilteredRepairs([]);
     }
   };
 
-  const loadOwners = () => {
-    const allOwners = getOwners();
-    setOwners(allOwners);
+  const getOwnerByRepair = (repair: Repair): Owner | null => {
+    const client = clients.find(c => (c as any).cedula === repair.vehicle.ownerId);
+    if (!client) return null;
+    
+    return {
+      id: (client as any).cedula || '',
+      cedula: (client as any).cedula || '',
+      name: client.nombre || '',
+      phone: client.telefono || '',
+      address: (client as any).direccion || ''
+    };
   };
 
-  const getOwnerByRepair = (repair: Repair): Owner | null => {
-    return owners.find(owner => owner.id === repair.vehicle.ownerId) || null;
-  };
+  
 
   const getStatusBadge = (status: Repair['status']) => {
     switch (status) {
-      case 'in-progress':
-        return <Badge variant="secondary">En Proceso</Badge>;
       case 'completed':
-        return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Completado</Badge>;
+        return <Badge className="inline-flex items-center rounded-md bg-green-400/10 px-2 py-1 text-xs font-medium text-green-400 inset-ring inset-ring-green-500/20">Completado</Badge>;
       case 'cancelled':
-        return <Badge variant="destructive">Cancelado</Badge>;
+        return <Badge className="inline-flex items-center rounded-md bg-red-400/10 px-2 py-1 text-xs font-medium text-red-400 inset-ring inset-ring-red-400/20">Cancelado</Badge>
+      case 'in-progress':
+        return <Badge className="inline-flex items-center rounded-md bg-gray-400/10 px-2 py-1 text-xs font-medium text-gray-400 inset-ring inset-ring-gray-400/20">En Proceso</Badge>;
       default:
-        return <Badge variant="outline">Desconocido</Badge>;
+        return <Badge>Desconocido</Badge>;
     }
   };
 
@@ -306,7 +311,7 @@ export function RepairHistory() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Propietarios</p>
-                  <p className="text-2xl">{owners.length}</p>
+                  <p className="text-2xl">{clients.length}</p>
                 </div>
                 <UserCheck className="size-8 text-muted-foreground" />
               </div>
@@ -329,7 +334,7 @@ export function RepairHistory() {
             {selectedRepair && (
               <RepairDetails 
                 repair={selectedRepair} 
-                onUpdate={() => { loadRepairs(); }}
+                onUpdate={() => { loadData(); }}
               />
             )}
           </DialogContent>

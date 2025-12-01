@@ -53,7 +53,7 @@ async function main() {
 
   const pool = new Pool(getConnParams(dbName));
   const sqlDir = path.resolve(__dirname, '..', 'sql');
-  const files = ['001_init.sql', '002_auth.sql', '003_reporting.sql'];
+  const files = ['001_init.sql', '002_auth.sql', '003_reporting.sql', '004_imagenes_reparaciones.sql'];
   console.log('Iniciando migraciones...');
   for (const f of files) {
     const full = path.join(sqlDir, f);

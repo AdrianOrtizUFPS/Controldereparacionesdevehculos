@@ -10,7 +10,6 @@ import { Separator } from './ui/separator';
 import { Alert, AlertDescription } from './ui/alert';
 import { Plus, X, Upload, User, CheckCircle, AlertCircle } from 'lucide-react';
 import { Repair, Vehicle, Supply, Evidence, Owner } from '../types/repair';
-import { addRepair, addOwner, getOwnerByPlate } from '../utils/storage';
 import { toast } from 'sonner@2.0.3';
 import { listarClientes, crearCliente, listarVehiculos, crearVehiculo, crearReparacion } from '@/utils/api';
 
@@ -32,17 +31,17 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
     model: '',
     year: new Date().getFullYear(),
     bin: '',
-    color: ''
+    kms: ''
   });
 
   const [repairData, setRepairData] = useState({
     problem: '',
     technician: '',
-    notes: ''
+    estimatedCost: 0
   });
 
-  const [supplies, setSupplies] = useState<Supply[]>([]);
-  const [newSupply, setNewSupply] = useState({ name: '', quantity: 1, unit: '', cost: 0 });
+  const [costs, setCosts] = useState<Array<{ id: string; description: string; amount: number }>>([]);
+  const [newCost, setNewCost] = useState({ description: '', amount: 0 });
   const [existingOwner, setExistingOwner] = useState<boolean>(false);
   const [plateSearched, setPlateSearched] = useState<boolean>(false);
 
@@ -54,23 +53,39 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
       return;
     }
 
-    const result = getOwnerByPlate(plate);
-    setPlateSearched(true);
-    
-    if (result) {
-      // Auto-completar datos del propietario y vehículo existente
-      setOwner(result.owner);
-      setVehicle({
-        plate: result.vehicle.plate,
-        brand: result.vehicle.brand,
-        model: result.vehicle.model,
-        year: result.vehicle.year,
-        bin: result.vehicle.bin,
-        color: result.vehicle.color
-      });
-      setExistingOwner(true);
-      toast.success('Datos del propietario y vehículo cargados automáticamente');
-    } else {
+    try {
+      const vehiculos = await listarVehiculos();
+      const vehiculoEncontrado = vehiculos.find(v => v.placa.toUpperCase() === plate.toUpperCase());
+      
+      setPlateSearched(true);
+      
+      if (vehiculoEncontrado) {
+        // Buscar el cliente asociado
+        const clientes = await listarClientes();
+        const clienteEncontrado = clientes.find(c => c.id === (vehiculoEncontrado as any).cliente_id);
+        
+        if (clienteEncontrado) {
+          // Auto-completar datos del propietario y vehículo existente
+          setOwner({
+            cedula: (clienteEncontrado as any).cedula || '',
+            name: clienteEncontrado.nombre || '',
+            phone: clienteEncontrado.telefono || '',
+            address: (clienteEncontrado as any).direccion || ''
+          });
+          setVehicle({
+            plate: vehiculoEncontrado.placa,
+            brand: vehiculoEncontrado.marca || '',
+            model: vehiculoEncontrado.modelo || '',
+            year: vehiculoEncontrado.anio || new Date().getFullYear(),
+            bin: vehiculoEncontrado.vin || '',
+            kms: (vehiculoEncontrado as any).kms || ''
+          });
+          setExistingOwner(true);
+          toast.success('Datos del propietario y vehículo cargados automáticamente');
+          return;
+        }
+      }
+      
       // Limpiar datos si no se encuentra el propietario
       setOwner({
         cedula: '',
@@ -84,8 +99,12 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
         model: '',
         year: new Date().getFullYear(),
         bin: '',
-        color: ''
+        kms: ''
       });
+      setExistingOwner(false);
+    } catch (error: any) {
+      console.error('Error buscando vehículo:', error);
+      setPlateSearched(true);
       setExistingOwner(false);
     }
   };
@@ -101,129 +120,106 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
     return () => clearTimeout(timeoutId);
   }, [vehicle.plate]);
 
-  const addSupply = () => {
-    if (!newSupply.name || !newSupply.unit) return;
+  const addCost = () => {
+    if (!newCost.description || !newCost.amount) return;
     
-    const supply: Supply = {
+    const cost = {
       id: Date.now().toString(),
-      name: newSupply.name,
-      quantity: newSupply.quantity,
-      unit: newSupply.unit,
-      cost: newSupply.cost || 0
+      description: newCost.description,
+      amount: newCost.amount
     };
     
-    setSupplies([...supplies, supply]);
-    setNewSupply({ name: '', quantity: 1, unit: '', cost: 0 });
+    setCosts([...costs, cost]);
+    setNewCost({ description: '', amount: 0 });
   };
 
-  const removeSupply = (id: string) => {
-    setSupplies(supplies.filter(s => s.id !== id));
+  const removeCost = (id: string) => {
+    setCosts(costs.filter(c => c.id !== id));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!vehicle.plate || !vehicle.brand || !repairData.problem || !repairData.technician ||
-        !owner.cedula || !owner.name || !owner.phone || !owner.address) {
+        !owner.cedula || !owner.name || !owner.phone) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
     }
 
-    // Crear o usar propietario existente
-    let ownerId = '';
-    
-    if (!existingOwner) {
-      // Crear nuevo propietario
-      const newOwner: Owner = {
-        id: Date.now().toString(),
-        cedula: owner.cedula!,
-        name: owner.name!,
-        phone: owner.phone!,
-        address: owner.address!,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      addOwner(newOwner);
-      ownerId = newOwner.id;
-    } else {
-      ownerId = (owner as Owner).id;
-    }
-
-    const repair: Repair = {
-      id: Date.now().toString(),
-      vehicle: {
-        id: Date.now().toString(),
-        plate: vehicle.plate!,
-        brand: vehicle.brand!,
-        model: vehicle.model || '',
-        year: vehicle.year || new Date().getFullYear(),
-        bin: vehicle.bin,
-        color: vehicle.color,
-        ownerId: ownerId
-      },
-      entryDate: new Date(),
-      problem: repairData.problem,
-      status: 'in-progress',
-      supplies,
-      evidences: [],
-      technician: repairData.technician,
-      notes: repairData.notes,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    // Persistir en backend además de localStorage
     try {
-      // 1) Asegurar cliente (por nombre y teléfono)
+      // 1) Buscar o crear cliente por cédula
       const clientes = await listarClientes();
-      let cliente = clientes.find(c => c.nombre === owner.name && c.telefono === owner.phone);
+      let cliente = clientes.find(c => (c as any).cedula === owner.cedula);
+      
       if (!cliente) {
-        cliente = await crearCliente({ nombre: owner.name!, telefono: owner.phone!, email: owner.address ? undefined : undefined });
+        // Crear nuevo cliente
+        cliente = await crearCliente({ 
+          cedula: owner.cedula!,
+          nombre: owner.name!, 
+          telefono: owner.phone!, 
+          email: undefined,
+          direccion: owner.address || undefined
+        });
+        toast.success('Cliente registrado en el sistema');
       }
 
-      // 2) Asegurar vehículo por placa
-      const vehiculos = await listarVehiculos();
+      // 2) Buscar o crear vehículo por placa
+      let vehiculos = await listarVehiculos();
       let vehiculoRow = vehiculos.find(v => v.placa.toUpperCase() === vehicle.plate!.toUpperCase());
+      
       if (!vehiculoRow) {
-        vehiculoRow = await crearVehiculo({
-          cliente_id: cliente.id,
+        // Crear nuevo vehículo asociado al cliente (usar cédula como cliente_cc)
+        await crearVehiculo({
+          cliente_cc: owner.cedula!,
           placa: vehicle.plate!,
           marca: vehicle.brand || undefined,
           modelo: vehicle.model || undefined,
           anio: vehicle.year || undefined,
           vin: vehicle.bin || undefined,
         });
+        toast.success('Vehículo registrado en el sistema');
+        
+        // Recargar lista para obtener el vehículo recién creado
+        vehiculos = await listarVehiculos();
+        vehiculoRow = vehiculos.find(v => v.placa.toUpperCase() === vehicle.plate!.toUpperCase());
+        
+        if (!vehiculoRow) {
+          throw new Error('No se pudo obtener el vehículo recién creado');
+        }
       }
 
-      // 3) Crear reparación en estado en_progreso
+      // 3) Calcular costo estimado total de los gastos
+      const totalEstimatedCost = costs.reduce((sum, cost) => sum + cost.amount, 0);
+
+      // 4) Crear reparación en estado en_progreso (usar placa como vehiculo_id)
       await crearReparacion({
-        vehiculo_id: vehiculoRow.id,
+        vehiculo_id: vehiculoRow.placa,  // La FK apunta a vehiculos.placa
+        cliente_id: owner.cedula!,  // La FK apunta a clientes.cedula
         descripcion: repairData.problem,
         estado: 'en_progreso',
-        costo_estimado: undefined,
+        costo_estimado: totalEstimatedCost > 0 ? totalEstimatedCost : undefined,
         costo_final: undefined,
-        fecha_ingreso: repair.entryDate.toISOString().slice(0, 10),
         fecha_salida: undefined,
         tecnico: repairData.technician,
         tipo_servicio: 'general',
+        kms: vehicle.kms || undefined,
       });
-    } catch (err: any) {
-      toast.error(`No se pudo guardar en la base de datos: ${err?.message || 'Error desconocido'}`);
-    }
 
-    // Mantener persistencia local para la UI actual
-    addRepair(repair);
-    toast.success('Reparación registrada exitosamente');
-    
-    // Reset form
-    setOwner({ cedula: '', name: '', phone: '', address: '' });
-    setVehicle({ plate: '', brand: '', model: '', year: new Date().getFullYear(), bin: '', color: '' });
-    setRepairData({problem: '', technician: '', notes: '' });
-    setSupplies([]);
-    setExistingOwner(false);
-    setPlateSearched(false);
-    
-    onSuccess?.();
+      toast.success('Reparación registrada exitosamente en la base de datos');
+      
+      // Reset form
+      setOwner({ cedula: '', name: '', phone: '', address: '' });
+      setVehicle({ plate: '', brand: '', model: '', year: new Date().getFullYear(), bin: '', kms: '' });
+      setRepairData({ problem: '', technician: '', estimatedCost: 0 });
+      setCosts([]);
+      setExistingOwner(false);
+      setPlateSearched(false);
+      
+      onSuccess?.();
+    } catch (err: any) {
+      console.error('Error guardando reparación:', err);
+      toast.error(`Error al guardar: ${err?.message || 'Error desconocido'}`);
+    }
   };
 
   return (
@@ -312,12 +308,13 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="color">Color</Label>
+                <Label htmlFor="kms">Kilómetros</Label>
                 <Input
-                  id="color"
-                  value={vehicle.color}
-                  onChange={(e) => setVehicle({ ...vehicle, color: e.target.value })}
-                  placeholder="Blanco, Negro, etc."
+                  id="kms"
+                  type="number"
+                  value={vehicle.kms}
+                  onChange={(e) => setVehicle({ ...vehicle, kms: e.target.value })}
+                  placeholder="Ej: 50000"
                 />
               </div>
             </div>
@@ -407,70 +404,60 @@ export function RepairForm({ onSuccess }: RepairFormProps) {
                   required
                 />
               </div>
-              <div>
-                <Label htmlFor="notes">Notas Adicionales</Label>
-                <Textarea
-                  id="notes"
-                  value={repairData.notes}
-                  onChange={(e) => setRepairData({ ...repairData, notes: e.target.value })}
-                  placeholder="Observaciones adicionales..."
-                />
-              </div>
             </div>
           </div>
 
           <Separator />
 
-          {/* Insumos */}
+          {/* Gastos Estimados */}
           <div>
-            <h3 className="mb-4">Insumos Utilizados</h3>
+            <h3 className="mb-4">Gastos Estimados</h3>
             
-            {/* Agregar nuevo insumo */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
+            {/* Agregar nuevo gasto */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
               <Input
-                placeholder="Nombre del insumo"
-                value={newSupply.name}
-                onChange={(e) => setNewSupply({ ...newSupply, name: e.target.value })}
+                placeholder="Descripción del gasto"
+                value={newCost.description}
+                onChange={(e) => setNewCost({ ...newCost, description: e.target.value })}
+                className="md:col-span-1"
               />
               <Input
                 type="number"
-                placeholder="Cantidad"
-                min="1"
-                value={newSupply.quantity}
-                onChange={(e) => setNewSupply({ ...newSupply, quantity: parseInt(e.target.value) || 1 })}
+                placeholder="Valor en COP"
+                min="0"
+                value={newCost.amount || ''}
+                onChange={(e) => setNewCost({ ...newCost, amount: parseInt(e.target.value) || 0 })}
               />
-              <Input
-                placeholder="Unidad (ej: litros, piezas)"
-                value={newSupply.unit}
-                onChange={(e) => setNewSupply({ ...newSupply, unit: e.target.value })}
-              />
-              <Button type="button" onClick={addSupply} className="w-full">
+              <Button type="button" onClick={addCost} className="w-full">
                 <Plus className="size-4 mr-2" />
-                Agregar
+                Agregar Gasto
               </Button>
             </div>
 
-            {/* Lista de insumos */}
-            {supplies.length > 0 && (
+            {/* Lista de gastos */}
+            {costs.length > 0 && (
               <div className="space-y-2">
-                {supplies.map((supply) => (
-                  <div key={supply.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                {costs.map((cost) => (
+                  <div key={cost.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
                     <div className="flex items-center gap-2">
+                      <span>{cost.description}</span>
                       <Badge variant="outline">
-                        {supply.quantity} {supply.unit}
+                        ${cost.amount.toLocaleString('es-CO')} COP
                       </Badge>
-                      <span>{supply.name}</span>
                     </div>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => removeSupply(supply.id)}
+                      onClick={() => removeCost(cost.id)}
                     >
                       <X className="size-4" />
                     </Button>
                   </div>
                 ))}
+                <div className="flex justify-end p-3 bg-primary/10 rounded-lg font-semibold">
+                  <span>Total Estimado: ${costs.reduce((sum, c) => sum + c.amount, 0).toLocaleString('es-CO')} COP</span>
+                </div>
               </div>
             )}
           </div>

@@ -107,8 +107,8 @@ export async function crearCliente(input: { nombre: string; telefono?: string; e
   return handle(res);
 }
 
-export async function actualizarCliente(id: number, input: Partial<{ nombre: string; telefono: string; email: string }>): Promise<Cliente>{
-  const res = await fetch(`/api/clientes/${id}`, {
+export async function actualizarCliente(id: string | number, input: Partial<{ cedula: string; nombre: string; telefono: string; email: string; direccion: string }>): Promise<Cliente>{
+  const res = await fetch(`/api/clientes/${encodeURIComponent(String(id))}`, {
     method: 'PUT',
     headers: authHeaders(),
     body: JSON.stringify(input),
@@ -160,7 +160,7 @@ export async function listarReparaciones(): Promise<Reparacion[]>{
   return handle(res);
 }
 
-export async function crearReparacion(input: { vehiculo_id: number; descripcion: string; estado?: string; costo_estimado?: number; costo_final?: number; fecha_ingreso?: string; fecha_salida?: string; tecnico?: string; tipo_servicio?: string; }): Promise<Reparacion>{
+export async function crearReparacion(input: { vehiculo_id: string; cliente_id?: string; descripcion: string; estado?: string; costo_estimado?: number; costo_final?: number; fecha_ingreso?: string; fecha_salida?: string; tecnico?: string; tipo_servicio?: string; kms?: string | number; }): Promise<Reparacion>{
   const res = await fetch('/api/reparaciones', {
     method: 'POST', headers: authHeaders(), body: JSON.stringify(input)
   });
@@ -196,12 +196,54 @@ export type ReporteRespuesta = {
   total_ingresos: number;
 };
 
-export async function obtenerReportes(params: { desde: string; hasta: string; tecnico?: string; tipo_servicio?: string; }): Promise<ReporteRespuesta> {
+export async function obtenerReportes(params: { desde: string; hasta: string; tecnico?: string; tipo_servicio?: string; placa?: string; marca?: string; modelo?: string; cliente?: string; }): Promise<ReporteRespuesta> {
   const q = new URLSearchParams();
   q.set('desde', params.desde);
   q.set('hasta', params.hasta);
   if (params.tecnico) q.set('tecnico', params.tecnico);
   if (params.tipo_servicio) q.set('tipo_servicio', params.tipo_servicio);
+  if (params.placa) q.set('placa', params.placa);
+  if (params.marca) q.set('marca', params.marca);
+  if (params.modelo) q.set('modelo', params.modelo);
+  if (params.cliente) q.set('cliente', params.cliente);
   const res = await fetch(`/api/reportes?${q.toString()}`, { headers: authHeaders() });
   return handle(res);
+}
+
+// Imágenes de reparaciones
+export type ImagenReparacion = {
+  id: number;
+  reparacion_id: number;
+  nombre_archivo: string;
+  tipo_mime: string;
+  tamano_bytes: number;
+  datos_base64: string;
+  descripcion?: string | null;
+  creado_en: string;
+};
+
+export async function listarImagenesReparacion(reparacionId: number): Promise<ImagenReparacion[]> {
+  const res = await fetch(`/api/reparaciones/${reparacionId}/imagenes`, { headers: authHeaders() });
+  return handle(res);
+}
+
+export async function subirImagenReparacion(reparacionId: number, input: { nombre_archivo: string; tipo_mime: string; tamano_bytes: number; datos_base64: string; descripcion?: string; }): Promise<ImagenReparacion> {
+  const res = await fetch(`/api/reparaciones/${reparacionId}/imagenes`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(input)
+  });
+  return handle(res);
+}
+
+export async function eliminarImagenReparacion(reparacionId: number, imagenId: number): Promise<void> {
+  const res = await fetch(`/api/reparaciones/${reparacionId}/imagenes/${imagenId}`, {
+    method: 'DELETE',
+    headers: authHeaders()
+  });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try { const data = await res.json(); message = (data as any)?.error || message; } catch {}
+    throw new Error(message);
+  }
 }
